@@ -27,6 +27,7 @@ public class HealtyRabbitWorker : BackgroundService
         // Validar y ajustar el intervalo
         var intervalMinutes = _options.IntervalMinutes < 1 ? 1 : _options.IntervalMinutes;
         
+        // Solo log al iniciar el servicio
         _logger.LogInformation(
             "HealtyRabbitWorker iniciado. URL: {Url}, Intervalo: {Interval} minutos",
             _options.Url,
@@ -45,13 +46,12 @@ public class HealtyRabbitWorker : BackgroundService
         }
         catch (OperationCanceledException)
         {
-            // Esto es esperado cuando se cancela el servicio
-            _logger.LogInformation("HealtyRabbitWorker detenido por cancelación");
+            // Detención normal del servicio - no loggear nada
         }
         catch (Exception ex)
         {
-            // Log de errores inesperados, pero no crashear el servicio
-            _logger.LogError(ex, "Error inesperado en el ciclo principal del worker");
+            // Log solo de errores críticos inesperados
+            _logger.LogCritical(ex, "Error crítico en el ciclo principal del worker");
         }
     }
 
@@ -64,8 +64,6 @@ public class HealtyRabbitWorker : BackgroundService
         
         try
         {
-            _logger.LogInformation("Iniciando consulta a {Url}", _options.Url);
-
             // Obtener el cliente HTTP nombrado
             var httpClient = _httpClientFactory.CreateClient("poller");
 
@@ -74,21 +72,17 @@ public class HealtyRabbitWorker : BackgroundService
             
             stopwatch.Stop();
 
-            // Registrar el resultado
-            _logger.LogInformation(
-                "Respuesta recibida - StatusCode: {StatusCode}, Tiempo: {ElapsedMs}ms",
-                (int)response.StatusCode,
-                stopwatch.ElapsedMilliseconds);
-
-            // Si no fue exitoso, registrar un warning adicional
+            // Solo loggear si hay error (no exitoso)
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning(
-                    "La respuesta no fue exitosa: {StatusCode} {ReasonPhrase} {Url}",
+                _logger.LogError(
+                    "Error en respuesta - StatusCode: {StatusCode} {ReasonPhrase} - URL: {Url} - Tiempo: {ElapsedMs}ms",
                     (int)response.StatusCode,
                     response.ReasonPhrase,
-                    _options.Url);
+                    _options.Url,
+                    stopwatch.ElapsedMilliseconds);
             }
+            // Si es exitoso, no loggear nada
         }
         catch (HttpRequestException ex)
         {
@@ -103,7 +97,7 @@ public class HealtyRabbitWorker : BackgroundService
         {
             stopwatch.Stop();
             
-            // Distinguir entre timeout y cancelación por token
+            // Solo loggear timeout, no cancelación normal del servicio
             if (!cancellationToken.IsCancellationRequested)
             {
                 _logger.LogError(
@@ -111,10 +105,6 @@ public class HealtyRabbitWorker : BackgroundService
                     "Timeout al consultar {Url} - Tiempo: {ElapsedMs}ms",
                     _options.Url,
                     stopwatch.ElapsedMilliseconds);
-            }
-            else
-            {
-                _logger.LogInformation("Consulta cancelada por detención del servicio");
             }
         }
         catch (Exception ex)
@@ -130,7 +120,8 @@ public class HealtyRabbitWorker : BackgroundService
 
     public override Task StopAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("HealtyRabbitWorker finalizando...");
+        // Solo log al detener el servicio
+        _logger.LogInformation("HealtyRabbitWorker detenido");
         return base.StopAsync(cancellationToken);
     }
 }

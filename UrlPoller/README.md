@@ -1,12 +1,12 @@
 # UrlPoller - Windows Service para Consulta Periódica de URLs
 
-Servicio de Windows (.NET 8) que realiza consultas HTTP periódicas a una URL configurada y registra los resultados.
+Servicio de Windows (.NET 8) que realiza consultas HTTP periódicas a una URL configurada y registra solo errores críticos.
 
 ## Características
 
 - ? Ejecutable como **Windows Service** con nombre `HealtyRabbit`
 - ? Consulta HTTP cada **8 minutos** (configurable) usando `PeriodicTimer`
-- ? Registro de **StatusCode** y **tiempo de respuesta**
+- ? **Logging minimalista**: solo registra errores y eventos críticos
 - ? Manejo robusto de errores (timeout, DNS, excepciones HTTP)
 - ? Configuración mediante `appsettings.json`
 - ? Logging compatible con **Windows Event Log**
@@ -77,19 +77,19 @@ dotnet publish -c Release
 - Ejecutar los comandos en **PowerShell como Administrador**
 - .NET 8 Runtime instalado (si no usas self-contained)
 
-### 1. Crear el servicio
+### 1. Crear el servicio (con cuenta LocalSystem para evitar problemas de permisos)
 
 ```powershell
-sc.exe create HealtyRabbit binPath= "C:\RUTA\COMPLETA\publish\UrlPoller.exe" start= auto
+sc.exe create HealtyRabbit binPath= "C:\RUTA\COMPLETA\publish\UrlPoller.exe" start= auto obj= LocalSystem
 ```
 
 > ?? **Importante:** Reemplaza `C:\RUTA\COMPLETA\publish\` con la ruta real donde publicaste el proyecto.  
-> ?? **Nota:** Debe haber un espacio después de `binPath=` y `start=`
+> ?? **Nota:** Debe haber un espacio después de `binPath=`, `start=` y `obj=`
 
 ### 2. Agregar descripción al servicio
 
 ```powershell
-sc.exe description HealtyRabbit "Consulta periódicamente una URL y registra el estado de la respuesta"
+sc.exe description HealtyRabbit "Consulta periódicamente una URL y registra errores"
 ```
 
 ### 3. Iniciar el servicio
@@ -143,7 +143,7 @@ sc.exe delete HealtyRabbit
 - Implementa `BackgroundService`
 - Usa `PeriodicTimer` para ejecución cada N minutos (sin solapes)
 - Maneja excepciones de red, timeout y errores HTTP
-- Registra StatusCode y tiempo de respuesta en logs
+- **Solo registra errores** - no loggea consultas exitosas
 - Finaliza limpiamente cuando se recibe `CancellationToken`
 
 #### `PollingOptions.cs`
@@ -155,51 +155,88 @@ sc.exe delete HealtyRabbit
 - ? **No crashea** ante errores de red o HTTP
 - ?? **Reintenta** automáticamente en el siguiente ciclo
 - ?? **Timeout configurado** (5 minutos por defecto)
-- ?? **Logging detallado** de cada operación
+- ?? **Logging minimalista** - solo errores críticos
 - ?? **Cancelación limpia** mediante `CancellationToken`
 
-## Ejemplos de Logs
+## Política de Logging
 
-### Inicio del servicio
-```
-[Information] HealtyRabbitWorker iniciado. URL: https://example.com/health, Intervalo: 8 minutos
-```
+El servicio **solo genera logs en los siguientes casos**:
 
-### Consulta exitosa
-```
-[Information] Iniciando consulta a https://example.com/health
-[Information] Respuesta recibida - StatusCode: 200, Tiempo: 234ms
-```
+### ? Eventos que SÍ se registran:
 
-### Error de timeout
-```
-[Error] Timeout al consultar https://example.com/health - Tiempo: 5000ms
-```
+1. **Inicio del servicio**
+   ```
+   [Information] HealtyRabbitWorker iniciado. URL: https://example.com/health, Intervalo: 8 minutos
+   ```
 
-### Detención del servicio
-```
-[Information] HealtyRabbitWorker finalizando...
-[Information] HealtyRabbitWorker detenido por cancelación
-```
+2. **Respuesta HTTP no exitosa** (StatusCode 4xx o 5xx)
+   ```
+   [Error] Error en respuesta - StatusCode: 500 Internal Server Error - URL: https://example.com/health - Tiempo: 234ms
+   ```
+
+3. **Error HTTP** (problemas de red, DNS, etc.)
+   ```
+   [Error] Error HTTP al consultar https://example.com/health - Tiempo: 150ms
+   ```
+
+4. **Timeout**
+   ```
+   [Error] Timeout al consultar https://example.com/health - Tiempo: 5000ms
+   ```
+
+5. **Error crítico inesperado**
+   ```
+   [Critical] Error crítico en el ciclo principal del worker
+   ```
+
+6. **Detención del servicio**
+   ```
+   [Information] HealtyRabbitWorker detenido
+   ```
+
+### ? Eventos que NO se registran:
+
+- Consultas HTTP exitosas (StatusCode 200-299)
+- Inicios de cada consulta individual
+- Cancelaciones normales del servicio
 
 ## Troubleshooting
 
-### El servicio no inicia
+### El servicio no inicia (Error "Access is denied")
 
-1. Verifica que la ruta del `binPath` sea correcta y absoluta
-2. Asegúrate de que `appsettings.json` esté en la misma carpeta que el ejecutable
-3. Revisa el Event Viewer para ver mensajes de error
+**Solución**: Usa la cuenta `LocalSystem` al crear el servicio:
+
+```powershell
+# Eliminar el servicio actual
+sc.exe stop HealtyRabbit
+sc.exe delete HealtyRabbit
+
+# Recrear con LocalSystem
+sc.exe create HealtyRabbit binPath= "C:\RUTA\publish\UrlPoller.exe" start= auto obj= LocalSystem
+sc.exe description HealtyRabbit "Consulta periódicamente una URL y registra errores"
+sc.exe start HealtyRabbit
+```
+
+### Verificar que el archivo existe
+
+```powershell
+Test-Path "C:\RUTA\publish\UrlPoller.exe"
+```
 
 ### No veo logs
 
 - Los logs se escriben en el **Event Log de Windows** (Application)
-- Asegúrate de tener permisos para escribir en el Event Log
-- Ajusta el nivel de log en `appsettings.json` si es necesario
+- Si todo funciona correctamente, **no habrá logs** excepto al iniciar/detener
+- Solo verás logs cuando hay errores
 
 ### Cambiar la URL sin reinstalar
 
 1. Edita `appsettings.json` en la carpeta de publicación
-2. Reinicia el servicio: `sc.exe stop HealtyRabbit && sc.exe start HealtyRabbit`
+2. Reinicia el servicio:
+   ```powershell
+   sc.exe stop HealtyRabbit
+   sc.exe start HealtyRabbit
+   ```
 
 ## Desarrollo y Testing
 
@@ -212,10 +249,10 @@ dotnet run
 
 Esto ejecutará el worker como aplicación de consola, útil para debugging.
 
-### Ejecutar tests
+### Compilar
 
 ```powershell
-dotnet test
+dotnet build
 ```
 
 ## Licencia
